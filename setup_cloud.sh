@@ -38,7 +38,7 @@ function setup-overcloud {
     neutron net-create public -- --router:external=true  --provider:network_type=flat  --provider:physical_network=datacentre
   fi
   if ! neutron subnet-list -c name -f value | grep -q public-subnet; then
-    neutron subnet-create public --name public-subnet --allocation-pool start=192.168.122.180,end=192.168.122.220 192.168.122.0/24
+    neutron subnet-create public --name public-subnet --allocation-pool start=10.0.0.210,end=10.0.0.240 10.0.0.0/24
     #neutron subnet-create public --name public-subnet --allocation-pool start=172.16.0.128,end=172.16.0.199 172.16.0.0/24
   fi
   help-msg
@@ -48,24 +48,33 @@ function create-tenant {
   . ~/overcloudrc
   tenant=$1
   openstack project create $tenant
+  project_id=$(openstack project show $tenant -c id -f value)
   openstack user create --password $tenant --project $tenant $tenant
+  openstack role add --project $project_id --user $tenant _member_ #did not need this before OSP 13
   openstack role add --project $tenant --user admin admin
-  #this works if run for admin project (or any other)
+
   export OS_USERNAME=$tenant
-  export OS_TENANT_NAME=$tenant
   export OS_PROJECT_NAME=$tenant
   export OS_PASSWORD=$tenant
   default_security_group_id=$(openstack security group list -c ID -c Name -c Project -f value | \
-    grep $(openstack project show $OS_TENANT_NAME -c id -f value) | grep default | awk '{ print $1 }')
+    grep $project_id | grep default | awk '{ print $1 }')
   echo default_security_group_id=$default_security_group_id
-#  openstack security group rule create --ingress --ethertype IPv4 --protocol icmp $default_security_group_id
-#  openstack security group rule create --ingress --ethertype IPv4 --protocol tcp --dst-port 22 $default_security_group_id
-  neutron security-group-rule-create --direction ingress \
-    --ethertype IPv4 --protocol tcp --port-range-min 22 \
-    --port-range-max 22 $default_security_group_id
-  neutron security-group-rule-create --direction ingress \
-   --ethertype IPv4 --protocol icmp $default_security_group_id
+
+  . ~/overcloudrc
+  openstack security group rule create --ingress --ethertype IPv4 --protocol icmp --project $tenant $default_security_group_id
+  openstack security group rule create --ingress --ethertype IPv4 --protocol tcp --dst-port 22 --project $tenant $default_security_group_id
   nova keypair-add demo-key
+
+#the following is legacy - worked for < OSP 13
+#  export OS_USERNAME=$tenant
+#  export OS_TENANT_NAME=$tenant
+#  export OS_PROJECT_NAME=$tenant
+#  export OS_PASSWORD=$tenant
+#  neutron security-group-rule-create --direction ingress \
+#    --ethertype IPv4 --protocol tcp --port-range-min 22 \
+#    --port-range-max 22 $default_security_group_id
+#  neutron security-group-rule-create --direction ingress \
+#   --ethertype IPv4 --protocol icmp $default_security_group_id
   help-msg
 }
  
@@ -107,10 +116,12 @@ function create-instance {
   for i in $(seq 1 $count); do 
     nova boot --flavor m1.tiny --image cirros --nic net-name=$tenant-private1-net $tenant-test$i
     sleep 5
-    nova floating-ip-associate $tenant-test$i $(neutron floatingip-create -c floating_ip_address -f value  public)
+    openstack server add floating ip  $tenant-test$i $(openstack floating ip create public -c floating_ip_address -f value)
+    #nova floating-ip-associate $tenant-test$i $(neutron floatingip-create -c floating_ip_address -f value  public)
   done
 
   help-msg
 }
 
 help-msg
+
